@@ -49,6 +49,7 @@ enum EntityStatus {
 export interface EffectEntity<TState, TEvent extends EventObject> {
   type: string;
   status: EntityStatus;
+  exec: EffectFunction<TState, TEvent, any> | undefined;
   start: (state: TState, dispatch: React.Dispatch<TEvent>) => void;
   stop: () => void;
 }
@@ -63,9 +64,10 @@ function createEffectEntity<
   const entity: EffectEntity<TState, TEvent> = {
     type: effect.type,
     status: EntityStatus.Idle,
+    exec: effect.exec,
     start: (state, dispatch) => {
-      if (effect.exec) {
-        effectCleanup = effect.exec(state, effect, dispatch);
+      if (entity.exec) {
+        effectCleanup = entity.exec(state, effect, dispatch);
       }
       entity.status = EntityStatus.Started;
     },
@@ -150,15 +152,10 @@ const toEffectObject = <
   TEvent extends EventObject,
   TEffect extends EffectObject<TState, TEvent>
 >(
-  effect: TEffect | EffectFunction<TState, TEvent, TEffect>,
-  effectsMap?: EffectsMap<TState, TEvent, TEffect>
+  effect: TEffect | EffectFunction<TState, TEvent, TEffect>
 ): TEffect => {
   const type = typeof effect === 'function' ? effect.name : effect.type;
-  const customExec = effectsMap
-    ? effectsMap[type as TEffect['type']]
-    : undefined;
-  const exec =
-    customExec || (typeof effect === 'function' ? effect : effect.exec);
+  const exec = typeof effect === 'function' ? effect : effect.exec;
   const other = typeof effect === 'function' ? {} : effect;
 
   return { ...other, type, exec } as TEffect;
@@ -181,7 +178,7 @@ export function useEffectReducer<
   effectsMap?: EffectsMap<TState, TEvent, TEffect>
 ): [TState, React.Dispatch<TEvent | TEvent['type']>] {
   const entitiesRef = useRef<Set<EffectEntity<TState, TEvent>>>(new Set());
-  const wrappedReducer = (
+  const wrappedReducer = useCallback( (
     [state, stateEffectTuples, entitiesToStop]: AggregatedEffectsState<
       TState,
       TEvent
@@ -199,7 +196,7 @@ export function useEffectReducer<
     const exec = (
       effect: TEffect | EffectFunction<TState, TEvent, TEffect>
     ) => {
-      const effectObject = toEffectObject(effect, effectsMap);
+      const effectObject = toEffectObject(effect);
       const effectEntity = createEffectEntity<TState, TEvent, TEffect>(
         effectObject
       );
@@ -237,7 +234,7 @@ export function useEffectReducer<
         ? [...entitiesToStop, ...nextEntitiesToStop]
         : nextEntitiesToStop,
     ];
-  };
+  },[effectReducer]);
 
   const initialStateAndEffects: AggregatedEffectsState<
     TState,
@@ -250,7 +247,7 @@ export function useEffectReducer<
         TState,
         TEffect
       >)(effect => {
-        const effectObject = toEffectObject(effect, effectsMap);
+        const effectObject = toEffectObject(effect);
         const effectEntity = createEffectEntity<TState, TEvent, TEffect>(
           effectObject
         );
@@ -293,9 +290,11 @@ export function useEffectReducer<
       effectStateEntityTuples.forEach(([effectState, effectEntities]) => {
         effectEntities.forEach(entity => {
           if (entity.status !== EntityStatus.Idle) return;
-
+          const customExec = effectsMap?effectsMap[entity.type as TEffect['type']]:null;
+          if (entity.exec === undefined && customExec)
+            entity.exec = customExec;
           entitiesRef.current.add(entity);
-          entity.start(effectState, dispatch);
+          entity.start(effectState, wrappedDispatch);
         });
       });
 
